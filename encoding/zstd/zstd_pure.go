@@ -4,6 +4,7 @@
 package zstd
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -26,7 +27,7 @@ func init() {
 	var err error
 	decoder, err = zstd.NewReader(nil)
 	if err != nil {
-		panic("BUG: failed to create ZSTD reader: %s", err)
+		panic(fmt.Sprintf("BUG: failed to create ZSTD reader: %s", err))
 	}
 }
 
@@ -74,7 +75,7 @@ func newEncoder(compressionLevel int) *zstd.Encoder {
 		zstd.WithEncoderCRC(false), // Disable CRC for performance reasons.
 		zstd.WithEncoderLevel(level))
 	if err != nil {
-		panic("BUG: failed to create ZSTD writer: %s", err)
+		panic(fmt.Sprintf("BUG: failed to create ZSTD writer: %s", err))
 	}
 	return e
 }
