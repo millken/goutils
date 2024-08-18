@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestAccu(t *testing.T) {
+	r := require.New(t)
 	accu := NewAccumulator()
 	if accu == nil {
 		t.Fatal("accumulator is nil")
@@ -14,130 +17,52 @@ func TestAccu(t *testing.T) {
 	key1 := "key1"
 	i := 0
 	for {
-		if !accu.AllowN(key1, 1, 3, 1) {
+		if !accu.AllowN(key1, 1, 1, time.Second) {
 			break
 		}
+		time.Sleep(100 * time.Millisecond)
 		i++
 	}
-	if i != 3 {
-		t.Fatal("i != 1")
-	}
+	r.Equal(1, i)
 	for {
-		if !accu.AllowN(key1, 1, 3, 1) {
+		if !accu.AllowN(key1, 1, 1, time.Second) {
 			break
 		}
 		i++
 	}
-	if i != 3 {
-		t.Fatal("i != 1")
-	}
+	r.Equal(1, i)
 	time.Sleep(1 * time.Second)
 	for {
-		if !accu.AllowN(key1, 1, 3, 1) {
+		if !accu.AllowN(key1, 1, 1, time.Second) {
 			break
 		}
 		i++
 	}
-	if i != 3 {
-		t.Fatal("i != 1")
-	}
-}
-
-func debug(sliding *sliding, currentTime, n uint64) bool {
-
-	seconds := sliding.seconds
-
-	sizeAlignedTime := currentTime - (currentTime % seconds)
-	timeSinceStart := sizeAlignedTime - sliding.current.getStartTime()
-	nSlides := timeSinceStart / seconds
-
-	// window slide shares both current and previous windows.
-	if nSlides == 1 {
-		sliding.previous.setToState(sizeAlignedTime-seconds, sliding.current.count)
-		sliding.current.resetToTime(sizeAlignedTime)
-
-	} else if nSlides > 1 {
-		sliding.previous.resetToTime(sizeAlignedTime - seconds)
-		sliding.current.resetToTime(sizeAlignedTime)
-	}
-
-	// currentWindowBoundary := currentTime - sliding.current.getStartTime()
-	b := seconds - (currentTime - sizeAlignedTime)
-	_ = b
-	if false {
-		a := uint64((sliding.previous.count/sliding.seconds)*(seconds-(currentTime-sizeAlignedTime))) + sliding.current.count
-		// fmt.Printf("[%d] %d\n", uint64(sliding.previous.count/sliding.seconds*(seconds-(currentTime-sizeAlignedTime))), sliding.current.count)
-		// currentSlidingRequests := uint64(w*float64(sliding.previous.count)) + sliding.current.count
-		// diff := currentTime - sizeAlignedTime
-		// rate := float64(sliding.previous.count)*(float64(sliding.seconds)-float64(diff))/float64(sliding.seconds) + float64(sliding.current.count)
-		// fmt.Println("rate", rate, "currentcount", sliding.current.count, "previouscount", sliding.previous.count, "diff", diff, "currentSlidingRequests", currentSlidingRequests, "n", n)
-		if a+n > sliding.limit {
-			return false
-		}
-	}
-	if true {
-		// Calculate the number of requests in the current sliding window
-		currentWindowBoundary := currentTime - sliding.current.getStartTime()
-		w := float64(sliding.seconds-currentWindowBoundary) / float64(sliding.seconds)
-		currentSlidingRequests := uint64(w*float64(sliding.previous.count)) + sliding.current.count
-
-		if currentSlidingRequests+n > sliding.limit {
-			return false
-		}
-	}
-
-	// add current request count to window of current count
-	sliding.current.updateCount(n)
-	return true
+	r.Equal(2, i)
 }
 
 func TestMain(t *testing.T) {
 	t.Log(float64(time.Duration(1) * time.Second))
 }
 
-func TestAccumulatorDebug(t *testing.T) {
-	sliding := newSliding(3, 3)
-	currentTime := uint64(1723982427)
-	//当前时间运行两次
-	n := uint64(1)
-	for i := 0; i < 5; i++ {
-		fmt.Printf("%d:%v", n, debug(sliding, currentTime, 1))
-		n++
-		currentTime++
-	}
-}
-
 func TestAccumulator(t *testing.T) {
-	sliding := newSliding(100, 3)
-	currentTime := uint64(1723982427)
-	for i := 0; i < 40; i++ {
-		fmt.Printf("%d ", currentTime)
+	key := "key1"
+	succ := 0
+	for i := 0; i < 10; i++ {
 		ok, fail := 0, 0
-		for j := 0; j < 83; j++ {
-			if debug(sliding, currentTime, 1) {
+		for j := 0; j < 200; j++ {
+			if Allow(key, 240, 3*time.Second) {
 				ok++
+				succ++
 			} else {
 				fail++
 			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		fmt.Printf("ok:%d, fail:%d\n", ok, fail)
-		currentTime++
+		fmt.Printf("%s ok:%d, fail:%d\n", time.Now(), ok, fail)
+		// time.Sleep(time.Second)
 	}
-	// currentTime = currentTime + 5
-	// for i := 0; i < 3; i++ {
-	// 	fmt.Printf("%d ", currentTime)
-	// 	ok, fail := 0, 0
-	// 	for j := 0; j < 12; j++ {
-	// 		if debug(sliding, currentTime, 1) {
-	// 			ok++
-	// 		} else {
-	// 			fail++
-	// 		}
-	// 	}
-	// 	fmt.Printf("ok:%d, fail:%d\n", ok, fail)
-	// 	currentTime++
-	// }
-
+	fmt.Println("succ", succ)
 }
 
 func TestMaina(t *testing.T) {

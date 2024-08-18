@@ -1,10 +1,10 @@
 package accumulator
 
 import (
-	"goutils/fasttime"
 	"hash/maphash"
 	"strconv"
 	"sync"
+	"time"
 )
 
 var instance *Accumulator = NewAccumulator()
@@ -29,43 +29,44 @@ func NewAccumulator() *Accumulator {
 	}
 }
 
-func (a *Accumulator) AllowN(key string, n uint64, limit uint64, seconds uint64) bool {
-	hash := a.hashKey(key, limit, seconds)
+func (a *Accumulator) AllowN(key string, n uint64, limit uint64, windowLength time.Duration) bool {
+	hash := a.hashKey(key, limit, windowLength)
 	sliding, ok := a.getsliding(hash)
 	if !ok {
-		sliding = newSliding(limit, seconds)
+		sliding = newSliding(limit, windowLength)
 		a.mu.Lock()
 		a.slidings[hash] = sliding
 		a.mu.Unlock()
 	}
-	currentTime := fasttime.UnixTimestamp()
+	currentTime := time.Now().UTC()
 
-	sizeAlignedTime := currentTime - (currentTime % seconds)
-	timeSinceStart := sizeAlignedTime - sliding.current.getStartTime()
-	nSlides := timeSinceStart / seconds
+	sizeAlignedTime := currentTime.Truncate(windowLength)
+	timeSinceStart := sizeAlignedTime.Sub(sliding.current.getStartTime())
+	nSlides := timeSinceStart / windowLength
+	sizeAlignedTime2 := sizeAlignedTime.Add(-windowLength)
 
 	// window slide shares both current and previous windows.
 	if nSlides == 1 {
-		sliding.previous.setToState(sizeAlignedTime-seconds, sliding.current.count)
+		sliding.previous.setToState(sizeAlignedTime2, sliding.current.count)
 		sliding.current.resetToTime(sizeAlignedTime)
 
 	} else if nSlides > 1 {
-		sliding.previous.resetToTime(sizeAlignedTime - seconds)
+		sliding.previous.resetToTime(sizeAlignedTime2)
 		sliding.current.resetToTime(sizeAlignedTime)
 	}
 
-	currentWindowBoundary := currentTime - sliding.current.getStartTime()
-
-	w := float64(sliding.seconds-currentWindowBoundary) / float64(sliding.seconds)
-
+	currentWindowBoundary := currentTime.Sub(sliding.current.getStartTime())
+	w := float64(sliding.windowLength-currentWindowBoundary) / float64(sliding.windowLength)
 	currentSlidingRequests := uint64(w*float64(sliding.previous.count)) + sliding.current.count
-
-	// diff := currentTime - sizeAlignedTime
-	// rate := float64(sliding.previous.count)*(float64(sliding.seconds)-float64(diff))/float64(sliding.seconds) + float64(sliding.current.count)
-	// fmt.Println("rate", rate)
 	if currentSlidingRequests+n > sliding.limit {
 		return false
 	}
+	// diff := currentTime.Sub(sizeAlignedTime)
+	// rate := float64(sliding.previous.count)*(float64(sliding.windowLength)-float64(diff))/float64(sliding.windowLength) + float64(sliding.current.count)
+	// nrate := uint64(math.Round(rate))
+	// if nrate >= sliding.limit {
+	// 	return false
+	// }
 
 	// add current request count to window of current count
 	sliding.current.updateCount(n)
@@ -79,18 +80,19 @@ func (a *Accumulator) getsliding(hash uint64) (*sliding, bool) {
 	return sliding, ok
 }
 
-func (a *Accumulator) hashKey(key string, limit uint64, seconds uint64) uint64 {
-	key = key + strconv.FormatUint(limit, 10) + strconv.FormatUint(seconds, 10)
+func (a *Accumulator) hashKey(key string, limit uint64, windowLength time.Duration) uint64 {
+	//TODO: use a better hashing algorithm
+	key = key + strconv.FormatUint(limit, 10) + windowLength.String()
 	return a.hasher(key)
 }
 
 // Allow returns true if the request is allowed, otherwise false.
 // The key is the unique identifier of the request, limit is the maximum
 // number of requests allowed in the duration, and size is the duration
-func Allow(key string, limit uint64, seconds uint64) bool {
-	return instance.AllowN(key, 1, limit, seconds)
+func Allow(key string, limit uint64, windowLength time.Duration) bool {
+	return instance.AllowN(key, 1, limit, windowLength)
 }
 
-func AllowN(key string, n uint64, limit uint64, seconds uint64) bool {
-	return instance.AllowN(key, n, limit, seconds)
+func AllowN(key string, n uint64, limit uint64, windowLength time.Duration) bool {
+	return instance.AllowN(key, n, limit, windowLength)
 }
