@@ -1,3 +1,3 @@
-module github.com/millken/goutils/fasttime
+module goutils/fasttime
 
 go 1.20
