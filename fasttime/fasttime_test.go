@@ -6,15 +6,20 @@ import (
 )
 
 func TestUnixTimestamp(t *testing.T) {
-	tsExpected := uint64(time.Now().Unix())
+	tsExpected := time.Now().Unix()
 	ts := UnixTimestamp()
 	if ts-tsExpected > 1 {
 		t.Fatalf("unexpected UnixTimestamp; got %d; want %d", ts, tsExpected)
 	}
+	time.Sleep(time.Second)
+	diff := time.Since(Time())
+	if diff > time.Millisecond*6 {
+		t.Errorf("time is not correct %v", diff)
+	}
 }
 
 func TestUnixDate(t *testing.T) {
-	dateExpected := uint64(time.Now().Unix() / (24 * 3600))
+	dateExpected := time.Now().Unix() / (24 * 3600)
 	date := UnixDate()
 	if date-dateExpected > 1 {
 		t.Fatalf("unexpected UnixDate; got %d; want %d", date, dateExpected)
@@ -22,7 +27,7 @@ func TestUnixDate(t *testing.T) {
 }
 
 func TestUnixHour(t *testing.T) {
-	hourExpected := uint64(time.Now().Unix() / 3600)
+	hourExpected := time.Now().Unix() / 3600
 	hour := UnixHour()
 	if hour-hourExpected > 1 {
 		t.Fatalf("unexpected UnixHour; got %d; want %d", hour, hourExpected)
@@ -30,7 +35,7 @@ func TestUnixHour(t *testing.T) {
 }
 
 func TestUnixMinute(t *testing.T) {
-	minuteExpected := uint64(time.Now().Unix() / 60)
+	minuteExpected := time.Now().Unix() / 60
 	minute := UnixMinute()
 	if minute-minuteExpected > 1 {
 		t.Fatalf("unexpected UnixMinute; got %d; want %d", minute, minuteExpected)

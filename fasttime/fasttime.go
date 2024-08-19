@@ -5,46 +5,65 @@ import (
 	"time"
 )
 
+var (
+	lastCorrection               = time.Now()
+	correctionDur  time.Duration = time.Millisecond * 100
+	dur            time.Duration = time.Millisecond * 5
+	_dur           int64
+	_t             atomic.Pointer[time.Time]
+)
+
 func init() {
+	atomic.StoreInt64(&_dur, dur.Nanoseconds())
+	ticker := time.Tick(time.Duration(atomic.LoadInt64(&_dur)))
+	_t.Store(&lastCorrection)
 	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for tm := range ticker.C {
-			t := uint64(tm.Unix())
-			atomic.StoreUint64(&currentTimestamp, t)
+		for atomic.LoadInt64(&_dur) > 0 {
+			t := <-ticker
+			// rely on ticker for approximation
+			if t.Sub(lastCorrection) < correctionDur {
+				now := Now().Add(time.Duration(atomic.LoadInt64(&_dur)))
+				_t.Store(&now)
+			} else { // correct the  time at a fixed interval
+				now := time.Now()
+				_t.Store(&now)
+				lastCorrection = t
+			}
 		}
 	}()
 }
 
-var currentTimestamp = uint64(time.Now().Unix())
-
 // UnixTimestamp returns the current unix timestamp in seconds.
 //
 // It is faster than time.Now().Unix()
-func UnixTimestamp() uint64 {
-	return atomic.LoadUint64(&currentTimestamp)
+func UnixTimestamp() int64 {
+	return Now().Unix()
 }
 
 // UnixDate returns date from the current unix timestamp.
 //
 // The date is calculated by dividing unix timestamp by (24*3600)
-func UnixDate() uint64 {
+func UnixDate() int64 {
 	return UnixTimestamp() / (24 * 3600)
 }
 
 // UnixHour returns hour from the current unix timestamp.
 //
 // The hour is calculated by dividing unix timestamp by 3600
-func UnixHour() uint64 {
+func UnixHour() int64 {
 	return UnixTimestamp() / 3600
 }
 
 // UnixMinute returns minute from the current unix timestamp.
-func UnixMinute() uint64 {
+func UnixMinute() int64 {
 	return UnixTimestamp() / 60
 }
 
 // Time returns the current time.Time
 func Time() time.Time {
-	return time.Unix(int64(UnixTimestamp()), 0)
+	return *_t.Load()
+}
+
+func Now() time.Time {
+	return Time()
 }
