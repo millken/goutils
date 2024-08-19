@@ -6,23 +6,21 @@ import (
 )
 
 var (
-	lastCorrection               = time.Now()
-	correctionDur  time.Duration = time.Millisecond * 100
-	dur            time.Duration = time.Millisecond * 5
-	_dur           int64
-	_t             atomic.Pointer[time.Time]
+	correctionDur time.Duration = time.Millisecond * 100
+	dur           time.Duration = time.Millisecond * 5
+	_t            atomic.Pointer[time.Time]
 )
 
 func init() {
-	atomic.StoreInt64(&_dur, dur.Nanoseconds())
-	ticker := time.Tick(time.Duration(atomic.LoadInt64(&_dur)))
+	ticker := time.Tick(dur)
+	lastCorrection := time.Now()
 	_t.Store(&lastCorrection)
 	go func() {
-		for atomic.LoadInt64(&_dur) > 0 {
+		for {
 			t := <-ticker
 			// rely on ticker for approximation
 			if t.Sub(lastCorrection) < correctionDur {
-				now := Now().Add(time.Duration(atomic.LoadInt64(&_dur)))
+				now := Now().Add(dur)
 				_t.Store(&now)
 			} else { // correct the  time at a fixed interval
 				now := time.Now()
