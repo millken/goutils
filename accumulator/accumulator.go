@@ -3,7 +3,6 @@ package accumulator
 import (
 	"hash/maphash"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -17,67 +16,61 @@ func defaultHasher(v string) uint64 {
 }
 
 type Accumulator struct {
-	mu       sync.RWMutex
-	slidings map[uint64]*sliding
-	hasher   Hasher
+	buckets [bucketsCount]bucket
+	hasher  Hasher
 }
 
 func NewAccumulator() *Accumulator {
-	return &Accumulator{
-		slidings: make(map[uint64]*sliding),
-		hasher:   defaultHasher,
+	acc := &Accumulator{
+		hasher: defaultHasher,
 	}
+	for i := range acc.buckets[:] {
+		acc.buckets[i].Reset()
+	}
+	return acc
 }
 
 func (a *Accumulator) AllowN(key string, n uint64, limit uint64, windowLength time.Duration) bool {
 	hash := a.hashKey(key, limit, windowLength)
-	sliding, ok := a.getsliding(hash)
+	idx := hash % bucketsCount
+	e, ok := a.buckets[idx].Get(hash)
 	if !ok {
-		sliding = newSliding(limit, windowLength)
-		a.mu.Lock()
-		a.slidings[hash] = sliding
-		a.mu.Unlock()
+		e = newEntry(limit, windowLength)
+		a.buckets[idx].Set(hash, e)
 	}
 	currentTime := time.Now().UTC()
 
 	sizeAlignedTime := currentTime.Truncate(windowLength)
-	timeSinceStart := sizeAlignedTime.Sub(sliding.current.getStartTime())
+	timeSinceStart := sizeAlignedTime.Sub(e.current.getStartTime())
 	nSlides := timeSinceStart / windowLength
 	sizeAlignedTime2 := sizeAlignedTime.Add(-windowLength)
 
 	// window slide shares both current and previous windows.
 	if nSlides == 1 {
-		sliding.previous.setToState(sizeAlignedTime2, sliding.current.count)
-		sliding.current.resetToTime(sizeAlignedTime)
+		e.previous.setToState(sizeAlignedTime2, e.current.count)
+		e.current.resetToTime(sizeAlignedTime)
 
 	} else if nSlides > 1 {
-		sliding.previous.resetToTime(sizeAlignedTime2)
-		sliding.current.resetToTime(sizeAlignedTime)
+		e.previous.resetToTime(sizeAlignedTime2)
+		e.current.resetToTime(sizeAlignedTime)
 	}
 
-	currentWindowBoundary := currentTime.Sub(sliding.current.getStartTime())
-	w := float64(sliding.windowLength-currentWindowBoundary) / float64(sliding.windowLength)
-	currentSlidingRequests := uint64(w*float64(sliding.previous.count)) + sliding.current.count
-	if currentSlidingRequests+n > sliding.limit {
+	currentWindowBoundary := currentTime.Sub(e.current.getStartTime())
+	w := float64(e.windowLength-currentWindowBoundary) / float64(e.windowLength)
+	currentSlidingRequests := uint64(w*float64(e.previous.count)) + e.current.count
+	if currentSlidingRequests+n > e.limit {
 		return false
 	}
 	// diff := currentTime.Sub(sizeAlignedTime)
-	// rate := float64(sliding.previous.count)*(float64(sliding.windowLength)-float64(diff))/float64(sliding.windowLength) + float64(sliding.current.count)
+	// rate := float64(entry.previous.count)*(float64(entry.windowLength)-float64(diff))/float64(entry.windowLength) + float64(entry.current.count)
 	// nrate := uint64(math.Round(rate))
-	// if nrate >= sliding.limit {
+	// if nrate >= entry.limit {
 	// 	return false
 	// }
 
 	// add current request count to window of current count
-	sliding.current.updateCount(n)
+	e.current.updateCount(n)
 	return true
-}
-
-func (a *Accumulator) getsliding(hash uint64) (*sliding, bool) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	sliding, ok := a.slidings[hash]
-	return sliding, ok
 }
 
 func (a *Accumulator) hashKey(key string, limit uint64, windowLength time.Duration) uint64 {

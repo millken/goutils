@@ -7,7 +7,7 @@ import (
 
 var (
 	correctionDur time.Duration = time.Millisecond * 100
-	dur           time.Duration = time.Millisecond * 5
+	dur           time.Duration = time.Millisecond * 20
 	_t            atomic.Pointer[time.Time]
 )
 

@@ -13,7 +13,7 @@ func TestUnixTimestamp(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 	diff := time.Since(Time())
-	if diff > time.Millisecond*6 {
+	if diff > time.Millisecond*21 {
 		t.Errorf("time is not correct %v", diff)
 	}
 }
