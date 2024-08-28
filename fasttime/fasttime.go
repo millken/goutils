@@ -3,28 +3,49 @@ package fasttime
 import (
 	"sync/atomic"
 	"time"
+	_ "unsafe"
 )
 
 var (
 	correctionDur time.Duration = time.Millisecond * 100
 	dur           time.Duration = time.Millisecond * 20
-	_t            atomic.Pointer[time.Time]
+	pt            atomic.Pointer[time.Time]
 )
+
+//go:linkname Now1 time.now
+func Now1() (sec int64, nsec int32, mono int64)
+
+// DateClock is faster version of t.Date(); t.Clock().
+func DateClock(t time.Time) (year, month, day, hour, min, sec int) { //nolint:gocritic
+	u := timeAbs(t)
+	year, month, day, _ = absDate(u, true)
+	hour, min, sec = absClock(u)
+	return
+}
+
+//go:linkname timeAbs time.Time.abs
+func timeAbs(time.Time) uint64
+
+//go:linkname absClock time.absClock
+func absClock(uint64) (hour, min, sec int)
+
+//go:linkname absDate time.absDate
+func absDate(uint64, bool) (year, month, day, yday int)
 
 func init() {
 	ticker := time.Tick(dur)
 	lastCorrection := time.Now()
-	_t.Store(&lastCorrection)
+	pt.Store(&lastCorrection)
 	go func() {
 		for {
 			t := <-ticker
 			// rely on ticker for approximation
 			if t.Sub(lastCorrection) < correctionDur {
 				now := Now().Add(dur)
-				_t.Store(&now)
+				pt.Store(&now)
 			} else { // correct the  time at a fixed interval
 				now := time.Now()
-				_t.Store(&now)
+				pt.Store(&now)
 				lastCorrection = t
 			}
 		}
@@ -59,7 +80,7 @@ func UnixMinute() int64 {
 
 // Time returns the current time.Time
 func Time() time.Time {
-	return *_t.Load()
+	return *pt.Load()
 }
 
 func Now() time.Time {

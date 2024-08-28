@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cespare/xxhash"
 	"github.com/stretchr/testify/require"
+	"github.com/zeebo/xxh3"
 )
 
 func TestAccu(t *testing.T) {
@@ -81,6 +83,13 @@ func TestMaina(t *testing.T) {
 func BenchmarkXxx(b *testing.B) {
 	b.ReportAllocs()
 	accu := NewAccumulator()
+	_ = func(key string) uint64 {
+		return xxh3.HashString(key)
+	}
+	hasher1 := func(key string) uint64 {
+		return xxhash.Sum64String(key)
+	}
+	accu.hasher = hasher1
 	key1 := "key1"
 	for i := 0; i < b.N; i++ {
 		accu.AllowN(key1, 1, 3, 1)

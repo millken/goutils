@@ -1,6 +1,7 @@
 package accumulator
 
 import (
+	"goutils/fasttime"
 	"hash/maphash"
 	"strconv"
 	"time"
@@ -33,43 +34,41 @@ func NewAccumulator() *Accumulator {
 func (a *Accumulator) AllowN(key string, n uint64, limit uint64, windowLength time.Duration) bool {
 	hash := a.hashKey(key, limit, windowLength)
 	idx := hash % bucketsCount
-	e, ok := a.buckets[idx].Get(hash)
-	if !ok {
-		e = newEntry(limit, windowLength)
-		a.buckets[idx].Set(hash, e)
-	}
-	currentTime := time.Now().UTC()
 
+	entry, exists := a.buckets[idx].Get(hash)
+	if !exists {
+		entry = newEntry(limit, windowLength)
+		a.buckets[idx].Set(hash, entry)
+	}
+
+	currentTime := fasttime.Now().UTC()
 	sizeAlignedTime := currentTime.Truncate(windowLength)
-	timeSinceStart := sizeAlignedTime.Sub(e.current.getStartTime())
-	nSlides := timeSinceStart / windowLength
+	timeSinceStart := sizeAlignedTime.Sub(entry.current.getStartTime())
+	nSlides := uint64(timeSinceStart / windowLength)
 	sizeAlignedTime2 := sizeAlignedTime.Add(-windowLength)
 
-	// window slide shares both current and previous windows.
+	// 处理窗口滑动
 	if nSlides == 1 {
-		e.previous.setToState(sizeAlignedTime2, e.current.count)
-		e.current.resetToTime(sizeAlignedTime)
-
+		// 如果窗口滑动一次，将当前窗口的计数复制到前一个窗口，并重置当前窗口
+		entry.previous.setToState(sizeAlignedTime2, entry.current.count)
+		entry.current.resetToTime(sizeAlignedTime)
 	} else if nSlides > 1 {
-		e.previous.resetToTime(sizeAlignedTime2)
-		e.current.resetToTime(sizeAlignedTime)
+		// 如果窗口滑动超过一次，重置前一个窗口和当前窗口
+		entry.previous.resetToTime(sizeAlignedTime2)
+		entry.current.resetToTime(sizeAlignedTime)
 	}
 
-	currentWindowBoundary := currentTime.Sub(e.current.getStartTime())
-	w := float64(e.windowLength-currentWindowBoundary) / float64(e.windowLength)
-	currentSlidingRequests := uint64(w*float64(e.previous.count)) + e.current.count
-	if currentSlidingRequests+n > e.limit {
+	currentWindowStart := entry.current.getStartTime()
+	currentWindowBoundary := currentTime.Sub(currentWindowStart)
+
+	w := float64(windowLength-currentWindowBoundary) / float64(windowLength)
+	currentSlidingRequests := uint64(w*float64(entry.previous.count)) + entry.current.count
+
+	if currentSlidingRequests+n > entry.limit {
 		return false
 	}
-	// diff := currentTime.Sub(sizeAlignedTime)
-	// rate := float64(entry.previous.count)*(float64(entry.windowLength)-float64(diff))/float64(entry.windowLength) + float64(entry.current.count)
-	// nrate := uint64(math.Round(rate))
-	// if nrate >= entry.limit {
-	// 	return false
-	// }
 
-	// add current request count to window of current count
-	e.current.updateCount(n)
+	entry.current.updateCount(n)
 	return true
 }
 
