@@ -51,23 +51,25 @@ func (t *DomainTrie[T]) search(node *Node[T], k string) *Node[T] {
 	pos := len(k)
 	for pos > 0 {
 		segment, next := segmenter(k, pos)
-		if nextNode, exists := node.children[segment]; exists {
-			if next == -1 {
-				return nextNode
-			}
-			if n := t.search(nextNode, k[:next]); n != nil && n.IsLeaf() {
-				return n
-			}
+		if foundNode := t.findNextNode(node, segment, k, next); foundNode != nil {
+			return foundNode
 		}
-		if nextNode, exists := node.children["*"]; exists {
-			if next == -1 {
-				return nextNode
-			}
-			if n := t.search(nextNode, k[:next]); n != nil && n.IsLeaf() {
-				return n
-			}
+		if foundNode := t.findNextNode(node, "*", k, next); foundNode != nil {
+			return foundNode
 		}
 		pos = next
+	}
+	return nil
+}
+
+func (t *DomainTrie[T]) findNextNode(node *Node[T], segment, k string, next int) *Node[T] {
+	if nextNode, exists := node.children[segment]; exists {
+		if next == -1 {
+			return nextNode
+		}
+		if n := t.search(nextNode, k[:next]); n != nil && n.IsLeaf() {
+			return n
+		}
 	}
 	return nil
 }
