@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +28,11 @@ func releaseStringBuilder(b *strings.Builder) {
 }
 
 type DatabaseProvider interface {
-	OptionProvider
+	Execer
+	Queryer
+}
+
+type ExecerAndQueryer interface {
 	Execer
 	Queryer
 }
@@ -42,10 +47,6 @@ type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 	QueryRow(query string, args ...interface{}) *sql.Row
 	QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row
-}
-
-type OptionProvider interface {
-	Option() option
 }
 
 func Insert(ctx context.Context, flavor Flavor, prefix string, execer Execer, table string, data map[string]any) (sql.Result, error) {
@@ -65,17 +66,63 @@ func Insert(ctx context.Context, flavor Flavor, prefix string, execer Execer, ta
 	return execer.ExecContext(ctx, query, values...)
 }
 
-func Select(ctx context.Context, queryer Queryer, flavor Flavor, prefix, table string, columns string, where Conditions) (*sql.Rows, error) {
-	var (
-		whereClause string
-		whereArgs   []any
-	)
-	conditionsCalsue(flavor, where, &whereClause, &whereArgs)
-	if whereClause != "" {
-		whereClause = " WHERE " + whereClause
+func StructScanContext(ctx context.Context, queryer Queryer, dest any, query string, args ...any) error {
+	rows, err := queryer.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s%s", columns, flavor.tableQuote(prefix, table), whereClause)
-	return queryer.QueryContext(ctx, query, whereArgs...)
+	defer rows.Close()
+
+	var vp reflect.Value
+	value := reflect.ValueOf(dest)
+	// json.Unmarshal returns errors for these
+	if value.Kind() != reflect.Ptr {
+		return errors.New("must pass a pointer, not a value, to StructScan destination")
+	}
+	if value.IsNil() {
+		return errors.New("nil pointer passed to StructScan destination")
+	}
+	direct := reflect.Indirect(value)
+	direct.SetLen(0)
+	slice, err := baseType(value.Type(), reflect.Slice)
+	if err != nil {
+		return err
+	}
+	base := deref(slice.Elem())
+	if base.Kind() != reflect.Struct {
+		return fmt.Errorf("must pass a pointer to a slice of structs, not %s", base.Kind())
+	}
+	isPtr := slice.Elem().Kind() == reflect.Ptr
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	scanArgs := make([]any, len(columns))
+	fieldMap := make(map[int][]int)
+
+	// 预先计算字段索引
+	for _, field := range fields(base) {
+		if columnIndex := slices.Index(columns, field.name); columnIndex >= 0 {
+			fieldMap[columnIndex] = field.field.Index
+		}
+	}
+	for rows.Next() {
+		vp = reflect.New(base)
+		for columnIndex, fieldIndex := range fieldMap {
+			scanArgs[columnIndex] = vp.Elem().FieldByIndex(fieldIndex).Addr().Interface()
+		}
+		err = rows.Scan(scanArgs...)
+		if err != nil {
+			return err
+		}
+		// append
+		if isPtr {
+			direct.Set(reflect.Append(direct, vp))
+		} else {
+			direct.Set(reflect.Append(direct, reflect.Indirect(vp)))
+		}
+	}
+	return nil
 }
 
 type aggregateType string
@@ -127,34 +174,6 @@ func Count(ctx context.Context, queryer Queryer, flavor Flavor, prefix, table st
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", flavor.tableQuote(prefix, table), where)
 	err := queryer.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
-}
-
-func Update(ctx context.Context, flavor Flavor, prefix string, execer Execer, table string, data map[string]any, where Conditions) (sql.Result, error) {
-	if len(where) == 0 {
-		return nil, fmt.Errorf("where conditions is empty")
-	}
-	dataLen := len(data)
-	if dataLen == 0 {
-		return nil, fmt.Errorf("no data to update")
-	}
-	fields := make([]string, 0, dataLen)
-	values := make([]any, 0, dataLen)
-	for k, v := range data {
-		fields = append(fields, fmt.Sprintf("%s=?", flavor.columnQuote(k)))
-		values = append(values, v)
-	}
-	var (
-		whereClause string
-		whereArgs   []any
-	)
-	conditionsCalsue(flavor, where, &whereClause, &whereArgs)
-	if whereClause != "" {
-		whereClause = " WHERE " + whereClause
-	}
-
-	query := fmt.Sprintf("UPDATE %s SET %s%s", flavor.tableQuote(prefix, table), strings.Join(fields, ", "), whereClause)
-	values = append(values, whereArgs...)
-	return execer.ExecContext(ctx, query, values...)
 }
 
 func FormatSQL(query string, args []any) string {
@@ -370,11 +389,9 @@ func assignValues[T any](schema *T, columns []string, values []interface{}) erro
 	return nil
 }
 
-func scanRow(row *sql.Row, schema interface{}) (interface{}, error) {
+func scanRow(row *sql.Row, schema interface{}) error {
 
-	newSchema := reflect.New(reflect.ValueOf(schema).Elem().Type()).Interface()
-
-	s := reflect.ValueOf(newSchema).Elem()
+	s := reflect.ValueOf(schema).Elem()
 
 	var fields []interface{}
 	for i := 0; i < s.NumField(); i++ {
@@ -383,13 +400,13 @@ func scanRow(row *sql.Row, schema interface{}) (interface{}, error) {
 
 	err := row.Scan(fields...)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	reflect.ValueOf(schema).Elem().Set(reflect.ValueOf(newSchema).Elem())
-	return newSchema, nil
+	// reflect.ValueOf(schema).Elem().Set(reflect.ValueOf(newSchema).Elem())
+	return nil
 }
 
-func Get[T any](q Queryer, dest T, query string, args ...interface{}) error {
+func Get(q Queryer, dest any, query string, args ...interface{}) error {
 	rows, err := q.Query(query, args...)
 	if err != nil {
 		return err
@@ -407,27 +424,14 @@ func Get[T any](q Queryer, dest T, query string, args ...interface{}) error {
 
 	destElem := destValue.Elem()
 	if destElem.Kind() == reflect.Struct {
-		// 获取查询结果的列名
 		columns, err := rows.Columns()
 		if err != nil {
 			return err
 		}
-
-		// 创建一个 map 来存储列名到结构体字段的映射
-		fieldMap := make(map[string]interface{})
-		for i := 0; i < destElem.NumField(); i++ {
-			field := destElem.Type().Field(i)
-			fieldMap[field.Name] = destElem.Field(i).Addr().Interface()
-		}
-
-		// 创建一个切片来存储扫描结果
-		scanArgs := make([]interface{}, len(columns))
-		for i, col := range columns {
-			if field, ok := fieldMap[col]; ok {
-				scanArgs[i] = field
-			} else {
-				var dummy interface{}
-				scanArgs[i] = &dummy
+		scanArgs := make([]any, len(columns))
+		for _, field := range fields(destElem.Type()) {
+			if columnIndex := slices.Index(columns, field.name); columnIndex >= 0 {
+				scanArgs[columnIndex] = destElem.FieldByIndex(field.field.Index).Addr().Interface()
 			}
 		}
 
@@ -445,4 +449,42 @@ func Get[T any](q Queryer, dest T, query string, args ...interface{}) error {
 	}
 
 	return nil
+}
+
+// fieldIndexes returns a map of database column name to struct field index.
+func fieldIndexes(structType reflect.Type) map[string]int {
+	indexes := make(map[string]int)
+
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		tag := field.Tag.Get("sql")
+		if tag != "" {
+			// Use "sql" tag if set
+			indexes[tag] = i
+		} else {
+			// Otherwise use field name (with exact case)
+			indexes[field.Name] = i
+		}
+	}
+	return indexes
+}
+
+var fieldIndexesCache sync.Map // map[reflect.Type]map[string]int
+
+// cachedFieldIndexes is like fieldIndexes, but cached per struct type.
+func cachedFieldIndexes(structType reflect.Type) map[string]int {
+	if f, ok := fieldIndexesCache.Load(structType); ok {
+		return f.(map[string]int)
+	}
+	indexes := fieldIndexes(structType)
+	fieldIndexesCache.Store(structType, indexes)
+	return indexes
+}
+
+// Deref is Indirect for reflect.Types
+func deref(t reflect.Type) reflect.Type {
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t
 }

@@ -74,3 +74,7 @@ func (tx *Tx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, erro
 	query = fixQuery(tx.Flavor, query)
 	return tx.Tx.PrepareContext(ctx, query)
 }
+
+func (tx *Tx) Get(dest any, query string, args ...interface{}) error {
+	return Get(tx, dest, query, args...)
+}

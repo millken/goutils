@@ -17,12 +17,7 @@ func testUpdate(t *testing.T, db *sqldb.DB) {
 	updateData := map[string]any{
 		"age": 55,
 	}
-	c := sqldb.NewCondition()
-	c.Field("name").Op("=").Value("foo")
-	c2 := sqldb.NewCondition()
-	c2.Field("age").Op("=").Value(20)
-	conditions := sqldb.NewConditions(c, c2)
-	res, err := db.Update(context.Background(), "users", updateData, conditions)
+	res, err := db.Table("users").Where("name", "=", "foo").Update(updateData)
 	r.NoError(err)
 	affected, err := res.RowsAffected()
 	r.NoError(err)
@@ -42,16 +37,21 @@ func testUpdate(t *testing.T, db *sqldb.DB) {
 
 func testSelect(t *testing.T, db *sqldb.DB) {
 	r := require.New(t)
-	rows, err := db.Select(context.Background(), "users", "*", sqldb.NewConditions(sqldb.NewCondition().Field("name").Op("=").Value("foo")))
+	var models []models.Users
+	err := db.StructScan(&models, "SELECT * FROM users")
 	r.NoError(err)
-	defer rows.Close()
-	r.True(rows.Next())
-	var name string
-	var age int
-	err = rows.Scan(&name, &age)
+	r.Len(models, 1)
+	r.Equal("foo", models[0].Name.String)
+	r.Equal(int64(55), models[0].Age.Int64)
+
+	//TODO fix this
+	var ages []struct {
+		Age int `db:"age"`
+	}
+	err = db.StructScan(&ages, "SELECT age FROM users")
 	r.NoError(err)
-	r.Equal("foo", name)
-	r.Equal(55, age)
+	r.Len(ages, 1)
+	r.Equal(55, ages[0].Age)
 }
 
 func testQuery(t *testing.T, db *sqldb.DB) {
@@ -124,11 +124,15 @@ func testExecContext(t *testing.T, db *sqldb.DB, ctx context.Context) {
 func testGet(t *testing.T, db *sqldb.DB) {
 	r := require.New(t)
 	var age int
-	err := db.Get(&age, "SELECT age FROM users where name = ?", "foo")
+	err := sqldb.Get(db, &age, "SELECT age FROM users where name = ?", "foo")
 	r.NoError(err)
 	r.Equal(55, age)
 	var model models.Users
 	err = db.Get(&model, "SELECT * FROM users where name = ?", "foo")
+	r.NoError(err)
+	r.Equal("foo", model.Name.String)
+	r.Equal(int64(55), model.Age.Int64)
+	err = db.Table("users").Where("name", "=", "foo").ScanRow(&model)
 	r.NoError(err)
 	r.Equal("foo", model.Name.String)
 	r.Equal(int64(55), model.Age.Int64)
@@ -146,7 +150,7 @@ func TestDB(t *testing.T) {
 		r.NoError(err)
 		_, err = db.Exec("CREATE TABLE users (name TEXT, age INTEGER)")
 		r.NoError(err)
-		res, err := db.Insert(ctx, "users", map[string]any{
+		res, err := db.Table("users").Insert(map[string]any{
 			"name": "foo",
 			"age":  20,
 		})
@@ -163,6 +167,7 @@ func TestDB(t *testing.T) {
 		testExecContext(t, db, ctx)
 		testUpdate(t, db)
 		testSelect(t, db)
+		testGet(t, db)
 	})
 	t.Run("mysql", func(t *testing.T) {
 		db, err := sqldb.Open("mysql", "root:admin@tcp(127.0.0.1:3306)/test")
@@ -171,7 +176,7 @@ func TestDB(t *testing.T) {
 		r.NoError(err)
 		_, err = db.Exec("CREATE TABLE users (name TEXT, age INTEGER)")
 		r.NoError(err)
-		res, err := db.Insert(ctx, "users", map[string]any{
+		res, err := db.Table("users").Insert(map[string]any{
 			"name": "foo",
 			"age":  20,
 		})
@@ -189,6 +194,7 @@ func TestDB(t *testing.T) {
 		testExecContext(t, db, ctx)
 		testUpdate(t, db)
 		testSelect(t, db)
+		testGet(t, db)
 	})
 	t.Run("postgres", func(t *testing.T) {
 		db, err := sqldb.Open("postgres", "user=postgres password=admin dbname=postgres sslmode=disable")
@@ -197,7 +203,7 @@ func TestDB(t *testing.T) {
 		r.NoError(err)
 		_, err = db.Exec("CREATE TABLE users (name TEXT, age INTEGER)")
 		r.NoError(err)
-		res, err := db.Insert(ctx, "users", map[string]any{
+		res, err := db.Table("users").Insert(map[string]any{
 			"name": "foo",
 			"age":  20,
 		})
@@ -229,10 +235,9 @@ func BenchmarkInsert(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		ctx := context.Background()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_, err = db.Insert(ctx, "users", map[string]any{
+			_, err = db.Table("users").Insert(map[string]any{
 				"name": "foo",
 				"age":  20,
 			})

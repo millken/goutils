@@ -3,10 +3,8 @@ package sqldb
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log"
-	"reflect"
 )
 
 type Option func(opt *option)
@@ -44,6 +42,7 @@ type option struct {
 
 type DB struct {
 	*sql.DB
+	*builder
 	Flavor Flavor
 	Option option
 }
@@ -77,6 +76,7 @@ func Open(driverName, dataSourceName string, opts ...Option) (*DB, error) {
 	for _, opt := range opts {
 		opt(&sqlDB.Option)
 	}
+	sqlDB.builder = newBuilder(flavor, sqlDB)
 	return sqlDB, err
 }
 
@@ -107,6 +107,7 @@ func NewSqlDB(db *sql.DB, flavor Flavor, opts ...Option) *DB {
 	for _, opt := range opts {
 		opt(&sqlDB.Option)
 	}
+	sqlDB.builder = newBuilder(flavor, sqlDB)
 	return sqlDB
 }
 
@@ -158,16 +159,20 @@ func (db *DB) Transaction(txFunc func(*Tx) error) (err error) {
 	return err
 }
 
-func (db *DB) Insert(ctx context.Context, table string, data map[string]any) (sql.Result, error) {
-	return Insert(ctx, db.Flavor, db.Option.Prefix, db, table, data)
+// func (db *DB) Insert(ctx context.Context, table string, data map[string]any) (sql.Result, error) {
+// 	return Insert(ctx, db.Flavor, db.Option.Prefix, db, table, data)
+// }
+
+// func (db *DB) Update(ctx context.Context, table string, data map[string]any, where Conditions) (sql.Result, error) {
+// 	return Update(ctx, db.Flavor, db.Option.Prefix, db, table, data, where)
+// }
+
+func (db *DB) StructScan(dest any, query string, args ...any) error {
+	return db.StructScanContext(context.Background(), dest, query, args...)
 }
 
-func (db *DB) Update(ctx context.Context, table string, data map[string]any, where Conditions) (sql.Result, error) {
-	return Update(ctx, db.Flavor, db.Option.Prefix, db, table, data, where)
-}
-
-func (db *DB) Select(ctx context.Context, table string, columns string, where Conditions) (*sql.Rows, error) {
-	return Select(ctx, db, db.Flavor, db.Option.Prefix, table, columns, where)
+func (db *DB) StructScanContext(ctx context.Context, dest any, query string, args ...any) error {
+	return StructScanContext(ctx, db, dest, query, args...)
 }
 
 // func (db *DB) Count(ctx context.Context, table string, where string, args ...any) (int, error) {
@@ -237,19 +242,7 @@ func (db *DB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, erro
 	return db.DB.PrepareContext(ctx, query)
 }
 
+// https://github.com/golang/go/issues/61637
 func (db *DB) Get(dest any, query string, args ...interface{}) error {
-	destValue := reflect.ValueOf(dest)
-	if destValue.Kind() != reflect.Ptr || destValue.IsNil() {
-		return errors.New("dest must be a non-nil pointer")
-	}
-	row := db.QueryRow(query, args...)
-	if destValue.Elem().Kind() != reflect.Struct {
-		return row.Scan(dest)
-	}
-	err := scanRow(row, dest)
-	if err != nil {
-		return err
-	}
-	// reflect.ValueOf(dest).Elem().Set(reflect.ValueOf(a).Elem())
-	return nil
+	return Get(db, dest, query, args...)
 }
