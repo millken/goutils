@@ -1,23 +1,20 @@
 package sqldb
 
 import (
-	"strconv"
 	"strings"
 	"time"
-	_ "unsafe" // required to use //go:linkname
 )
 
-//go:noescape
-//go:linkname nanotime runtime.nanotime
-func nanotime() int64
-func Now() uint64 {
-	return uint64(nanotime())
+func nanotime() int64 {
+	return time.Since(globalStart).Nanoseconds()
 }
+
+var globalStart = time.Now()
 
 // Since returns the amount of time that has elapsed since t. t should be
 // the result of a call to Now() on the same machine.
-func Since(t uint64) time.Duration {
-	return time.Duration(Now() - t)
+func timeSince(t int64) time.Duration {
+	return time.Duration(nanotime() - t)
 }
 
 // Supported drivers.
@@ -78,18 +75,4 @@ func (f Flavor) columnQuote(column string) string {
 	}
 
 	return columnQuote + column + columnQuote
-}
-
-func (f Flavor) placeHolder(dataLen int) string {
-	switch f {
-	case MySQL, SQLite:
-		return strings.Repeat("?,", dataLen)[:dataLen*2-1]
-	case PostgreSQL:
-		var placeholder string
-		for i := 1; i <= dataLen; i++ {
-			placeholder += "$" + strconv.Itoa(i) + ","
-		}
-		return placeholder[:len(placeholder)-1]
-	}
-	return ""
 }

@@ -1,4 +1,4 @@
-//go:build go1.18 && !go1.24
+//go:build go1.18 && !go1.25
 
 package hashmap
 

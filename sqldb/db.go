@@ -9,12 +9,6 @@ import (
 
 type Option func(opt *option)
 
-func WithPrefix(prefix string) Option {
-	return func(opt *option) {
-		opt.Prefix = prefix
-	}
-}
-
 func WithDebug(debug bool) Option {
 	return func(opt *option) {
 		opt.Debug = debug
@@ -34,7 +28,6 @@ func WithTraceSQL(traceSQL bool) Option {
 }
 
 type option struct {
-	Prefix   string
 	Debug    bool
 	TraceSQL bool
 	Log      func(string, ...any)
@@ -68,9 +61,8 @@ func Open(driverName, dataSourceName string, opts ...Option) (*DB, error) {
 		DB:     db,
 		Flavor: flavor,
 		Option: option{
-			Prefix: "",
-			Debug:  false,
-			Log:    log.Printf,
+			Debug: false,
+			Log:   log.Printf,
 		},
 	}
 	for _, opt := range opts {
@@ -99,9 +91,8 @@ func NewSqlDB(db *sql.DB, flavor Flavor, opts ...Option) *DB {
 		DB:     db,
 		Flavor: flavor,
 		Option: option{
-			Prefix: "",
-			Debug:  false,
-			Log:    log.Printf,
+			Debug: false,
+			Log:   log.Printf,
 		},
 	}
 	for _, opt := range opts {
@@ -167,12 +158,12 @@ func (db *DB) Transaction(txFunc func(*Tx) error) (err error) {
 // 	return Update(ctx, db.Flavor, db.Option.Prefix, db, table, data, where)
 // }
 
-func (db *DB) StructScan(dest any, query string, args ...any) error {
-	return db.StructScanContext(context.Background(), dest, query, args...)
+func (db *DB) QueryScan(dest any, query string, args ...any) error {
+	return db.QueryScanContext(context.Background(), dest, query, args...)
 }
 
-func (db *DB) StructScanContext(ctx context.Context, dest any, query string, args ...any) error {
-	return StructScanContext(ctx, db, dest, query, args...)
+func (db *DB) QueryScanContext(ctx context.Context, dest any, query string, args ...any) error {
+	return ScanContext(ctx, db, dest, query, args...)
 }
 
 // func (db *DB) Count(ctx context.Context, table string, where string, args ...any) (int, error) {
@@ -191,8 +182,8 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	}
 	query = fixQuery(db.Flavor, query)
 	if opt.Debug {
-		start := Now()
-		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, Since(start))
+		start := nanotime()
+		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, timeSince(start))
 	}
 	return db.DB.ExecContext(ctx, query, args...)
 }
@@ -209,8 +200,8 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql
 	}
 	query = fixQuery(db.Flavor, query)
 	if opt.Debug {
-		start := Now()
-		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, Since(start))
+		start := nanotime()
+		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, timeSince(start))
 	}
 	return db.DB.QueryContext(ctx, query, args...)
 }
@@ -227,8 +218,8 @@ func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) *s
 	}
 	query = fixQuery(db.Flavor, query)
 	if opt.Debug {
-		start := Now()
-		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, Since(start))
+		start := nanotime()
+		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, timeSince(start))
 	}
 	return db.DB.QueryRowContext(ctx, query, args...)
 }
@@ -240,9 +231,4 @@ func (db *DB) Prepare(query string) (*sql.Stmt, error) {
 func (db *DB) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
 	query = fixQuery(db.Flavor, query)
 	return db.DB.PrepareContext(ctx, query)
-}
-
-// https://github.com/golang/go/issues/61637
-func (db *DB) Get(dest any, query string, args ...interface{}) error {
-	return Get(db, dest, query, args...)
 }

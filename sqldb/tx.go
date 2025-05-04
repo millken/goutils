@@ -24,8 +24,8 @@ func (tx *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	}
 	query = fixQuery(tx.Flavor, query)
 	if opt.Debug {
-		start := Now()
-		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, Since(start))
+		start := nanotime()
+		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, timeSince(start))
 	}
 	return tx.Tx.ExecContext(ctx, query, args...)
 }
@@ -42,8 +42,8 @@ func (tx *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql
 	}
 	query = fixQuery(tx.Flavor, query)
 	if opt.Debug {
-		start := Now()
-		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, Since(start))
+		start := nanotime()
+		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, timeSince(start))
 	}
 	return tx.Tx.QueryContext(ctx, query, args...)
 }
@@ -60,8 +60,8 @@ func (tx *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *s
 	}
 	query = fixQuery(tx.Flavor, query)
 	if opt.Debug {
-		start := Now()
-		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, Since(start))
+		start := nanotime()
+		defer opt.Log("query: %s, args: %v, time: %v\n", query, args, timeSince(start))
 	}
 	return tx.Tx.QueryRowContext(ctx, query, args...)
 }
@@ -75,6 +75,6 @@ func (tx *Tx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, erro
 	return tx.Tx.PrepareContext(ctx, query)
 }
 
-func (tx *Tx) Get(dest any, query string, args ...interface{}) error {
-	return Get(tx, dest, query, args...)
+func (tx *Tx) QueryScan(dest any, query string, args ...interface{}) error {
+	return Scan(tx, dest, query, args...)
 }

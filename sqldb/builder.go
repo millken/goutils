@@ -45,6 +45,17 @@ func (b *builder) Where(column, operator string, value any) *builder {
 	return b.buildWhere("", column, operator, value)
 }
 
+func (b *builder) Count() (int, error) {
+	b1 := b.Clone()
+	defer b1.Reset()
+	b1.columns = []string{"COUNT(*)"}
+	query, args := b1.buildSelect(), prepareValues(b1.whereBindings)
+	var count int
+	row := b1.db.QueryRow(query, args...)
+	err := row.Scan(&count)
+	return count, err
+}
+
 func (b *builder) buildWhere(prefix, operand, operator string, val any) *builder {
 	if prefix != "" {
 		prefix = " " + prefix + " "
@@ -215,8 +226,16 @@ func (b *builder) Insert(data any) (sql.Result, error) {
 	case map[string]any:
 		return b.insertMap(v)
 	default:
-		return nil, fmt.Errorf("unsupported type %T", v)
+		return b.insertAny(data)
 	}
+}
+
+func (b *builder) insertAny(data any) (sql.Result, error) {
+	ins := &inserter{
+		Table: b.table,
+		Data:  data,
+	}
+	return b.db.Exec(ins.SQL(), ins.Args()...)
 }
 
 func (b *builder) insertMap(data map[string]any) (sql.Result, error) {
@@ -254,15 +273,10 @@ func (b *builder) updateMap(data map[string]any) (sql.Result, error) {
 	return b.db.Exec(query, values...)
 }
 
-func (b *builder) ScanRow(dest any) error {
-	query, args := b.buildSelect(), prepareValues(b.whereBindings)
-	return Get(b.db, dest, query, args...)
-}
-
-func (b *builder) ScanRows(dest any) error {
+func (b *builder) Scan(dest any) error {
 	defer b.Reset()
 	query, args := b.buildSelect(), prepareValues(b.whereBindings)
-	return StructScanContext(context.Background(), b.db, dest, query, args...)
+	return ScanContext(context.Background(), b.db, dest, query, args...)
 }
 
 func (b *builder) Reset() {
@@ -273,4 +287,18 @@ func (b *builder) Reset() {
 	b.groupBy = ""
 	b.offset = 0
 	b.limit = 0
+}
+
+func (b *builder) Clone() *builder {
+	return &builder{
+		flavor:        b.flavor,
+		db:            b.db,
+		table:         b.table,
+		columns:       b.columns,
+		whereBindings: b.whereBindings,
+		orderBy:       b.orderBy,
+		groupBy:       b.groupBy,
+		offset:        b.offset,
+		limit:         b.limit,
+	}
 }

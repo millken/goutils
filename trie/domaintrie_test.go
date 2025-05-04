@@ -85,16 +85,20 @@ func TestDomainTrie(t *testing.T) {
 			val:    np(3),
 		},
 		{
-			domain: "sub.*.example.com",
+			domain: "sub.c.example.com",
 			val:    np(4),
 		},
 		{
 			domain: "*.sub.c.example.com",
 			val:    np(5),
 		},
+		{
+			domain: "*.example.com",
+			val:    np(6),
+		},
 	}
 	for _, test := range tests {
-		tree.Insert(test.domain, *test.val)
+		tree.Insert2(test.domain, *test.val)
 	}
 	tree.Print()
 
@@ -108,7 +112,7 @@ func TestDomainTrie(t *testing.T) {
 		},
 		{
 			domain: "a.example.com",
-			val:    nil,
+			val:    np(6),
 		},
 		{
 			domain: "b.c.example.com",
@@ -116,7 +120,7 @@ func TestDomainTrie(t *testing.T) {
 		},
 		{
 			domain: "b.b.example.com",
-			val:    nil,
+			val:    np(6),
 		},
 		{
 			domain: "www.example.com",
@@ -124,15 +128,11 @@ func TestDomainTrie(t *testing.T) {
 		},
 		{
 			domain: "sub.a.example.com",
-			val:    np(4),
+			val:    np(6),
 		},
 		{
-			domain: "sub.a.example.com",
-			val:    np(4),
-		},
-		{
-			domain: "sub.a.b.a.example.com",
-			val:    np(4),
+			domain: "sub.af.c.example.com",
+			val:    np(2),
 		},
 		{
 			domain: "bb.sub.c.example.com",
@@ -140,7 +140,7 @@ func TestDomainTrie(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		node := tree.Search(test.domain)
+		node := tree.Search2(test.domain)
 		if test.val == nil {
 			assert.Zero(t, node, test.domain)
 			continue
@@ -177,15 +177,34 @@ func BenchmarkDomainTrieSearch(b *testing.B) {
 			val:    3,
 		},
 		{
-			domain: "sub.*.example.com",
+			domain: "sub.a.example.com",
 			val:    4,
 		},
 	}
 	for _, test := range tests {
-		tree.Insert(test.domain, test.val)
+		tree.Insert2(test.domain, test.val)
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tree.Search("sub.a.example.com")
+		tree.Search2("sub.a.example.com")
+	}
+}
+func TestSlitDomainIterator(t *testing.T) {
+	domain := "www.aa.com"
+	for part := range SplitDomainReverseIterator(domain) {
+		println(part) // 输出 www → aa → com
+	}
+}
+
+func BenchmarkReverse_str(b *testing.B) {
+	// domain := make([]byte, len("example.com"))
+	for i := 0; i < b.N; i++ {
+		// n := ReverseDomainInplace("example.com", domain)
+		// if n != len("example.com") {
+		// 	b.Fatalf("expected %d, got %d", len("example.com"), n)
+		// }
+		for range SplitDomainReverseIterator("example.com") {
+
+		}
 	}
 }

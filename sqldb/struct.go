@@ -3,6 +3,7 @@ package sqldb
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"sync/atomic"
 )
 
@@ -12,6 +13,10 @@ type field struct {
 }
 
 var cachedFields atomic.Value // map[reflect.Type][]field
+
+func init() {
+	cachedFields.Store(make(map[reflect.Type][]field))
+}
 
 func appendFields(fields []field, t reflect.Type, index []int) []field {
 	for i, n := 0, t.NumField(); i < n; i++ {
@@ -28,7 +33,8 @@ func appendFields(fields []field, t reflect.Type, index []int) []field {
 			} else if s, ok := f.Tag.Lookup("db"); ok {
 				fields = append(fields, field{s, f})
 			} else {
-				fields = append(fields, field{f.Name, f})
+				//默认小写
+				fields = append(fields, field{strings.ToLower(f.Name), f})
 			}
 		}
 	}

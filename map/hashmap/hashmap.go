@@ -20,6 +20,12 @@ func WithShardCount[K comparable, V any](shardCount int) HashMapOption[K, V] {
 	}
 }
 
+func WithHasher[K comparable, V any](hasher func(key unsafe.Pointer, seed uintptr) uintptr) HashMapOption[K, V] {
+	return func(m *HashMap[K, V]) {
+		m.hasher = hasher
+	}
+}
+
 func NewHashMap[K comparable, V any](options ...HashMapOption[K, V]) *HashMap[K, V] {
 	m := &HashMap[K, V]{
 		shardCount: nextPowerOfTwo(runtime.GOMAXPROCS(0) * 16),

@@ -2,7 +2,21 @@ package hashmap
 
 import (
 	"testing"
+	"unsafe"
 )
+
+func TestRuntimeStructAlignment(t *testing.T) {
+	a := any((map[int]struct{})(nil))
+	eface := (*rtEface)(unsafe.Pointer(&a))
+	if eface.typ.Hasher == nil {
+		t.Fatal("Go runtime structure incompatible!")
+	}
+	hash := eface.typ.Hasher(unsafe.Pointer(&a), uintptr(0))
+	if hash == 0 {
+		t.Fatal("Go runtime structure incompatible!")
+	}
+	t.Log(hash)
+}
 
 func TestHashMap(t *testing.T) {
 	m := NewHashMap[int, string]()
@@ -20,6 +34,16 @@ func TestHashMap(t *testing.T) {
 
 func BenchmarkHashMap(b *testing.B) {
 	m := NewHashMap[int, string]()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.Set(i, "value")
+	}
+}
+
+func BenchmarkHashMapWithHasher(b *testing.B) {
+	m := NewHashMap[int, string](WithHasher[int, string](func(key unsafe.Pointer, seed uintptr) uintptr {
+		return uintptr(key)
+	}))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		m.Set(i, "value")

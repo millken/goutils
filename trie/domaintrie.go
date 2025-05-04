@@ -2,7 +2,7 @@ package trie
 
 import (
 	"fmt"
-	"strings"
+	"iter"
 	"sync"
 )
 
@@ -10,11 +10,12 @@ func segmenter(path string, pos int) (segment string, next int) {
 	if len(path) == 0 || pos < 0 || pos > len(path) {
 		return "", -1
 	}
-	start := strings.LastIndexByte(path[:pos], '.')
-	if start == -1 {
-		return path[:pos], -1
+	for i := pos - 1; i >= 0; i-- {
+		if path[i] == '.' {
+			return path[i+1 : pos], i
+		}
 	}
-	return path[start+1 : pos], start
+	return path[:pos], -1
 }
 
 type DomainTrie[T any] struct {
@@ -34,10 +35,93 @@ func (t *DomainTrie[T]) Insert(k string, value T) {
 	var part string
 	for i > 0 {
 		part, i = segmenter(k, i)
-		node = node.GetOrSet(part, NewNodeNil[T](node))
+		node = node.GetOrSet(part, NewNodeNil(node))
 	}
 	node.MarkAsLeaf()
 	node.SetData(value)
+}
+func SplitDomainReverseIterator(domain string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		start := len(domain)
+		// 从右向左扫描
+		for i := len(domain) - 1; i >= 0; i-- {
+			if domain[i] == '.' {
+				part := domain[i+1 : start]
+				if part != "" {
+					if !yield(part) {
+						return
+					}
+				}
+				start = i // 更新段起始位置
+			}
+		}
+		// 处理首段（最左侧部分）
+		if start > 0 {
+			part := domain[0:start]
+			if !yield(part) {
+				return
+			}
+		}
+	}
+}
+func (tree *DomainTrie[T]) Insert2(domain string, data T) {
+	tree.Lock()
+	defer tree.Unlock()
+	node := tree.root
+	for part := range SplitDomainReverseIterator(domain) {
+		child, ok := node.children[part]
+		if !ok {
+			child = &Node[T]{children: make(map[string]*Node[T])}
+			node.children[part] = child
+			child.parent = node
+		}
+		node = child
+	}
+	node.data = data
+	node.isLeaf = true
+}
+
+func (tree *DomainTrie[T]) Search2(domain string) *Node[T] {
+	tree.RLock()
+	defer tree.RUnlock()
+
+	var wildcard *Node[T]
+	node := tree.root
+	matchCount := 0 // 记录成功匹配的段数
+	totalCount := 0 // 记录总段数
+	hc := []byte{0, 0}
+
+	for part := range SplitDomainReverseIterator(domain) {
+		totalCount++
+		child, ok := node.children[part]
+		if !ok {
+			// 精确匹配失败，尝试通配符
+			child, ok = node.children["*"]
+			if ok {
+				wildcard = child
+				matchCount++
+				hc[1]++
+				break
+			}
+		} else {
+			node = child
+			matchCount++
+			hc[0]++
+		}
+	}
+
+	// 只有完全匹配所有段时才算成功
+	if matchCount == totalCount {
+		// 通配符匹配
+		if wildcard != nil && wildcard.isLeaf {
+			return wildcard
+		}
+		if node.isLeaf {
+			return node
+		}
+
+	}
+	return nil
 }
 
 func (t *DomainTrie[T]) Search(k string) *Node[T] {
