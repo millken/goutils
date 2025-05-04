@@ -1,6 +1,7 @@
 package trie
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -16,6 +17,7 @@ func TestTree(t *testing.T) {
 	tree.Add("*.cdn.example.com", "CDN服务器")
 	tree.Add("a1.cdn.example.com", "CDN服务器-A1")
 	tree.Add("a1.a3.a4.cdn.example.com", "CDN服务器-A1-A3-A4")
+	tree.Add("cdn.example.com", "CDN主站更新")
 	tests := []struct {
 		domain string
 		found  bool
@@ -44,7 +46,7 @@ func TestTree(t *testing.T) {
 		{
 			domain: "cdn.example.com",
 			found:  true,
-			val:    "CDN主站",
+			val:    "CDN主站更新",
 		},
 		{
 			domain: "1.cdn.example.com",
@@ -81,12 +83,12 @@ func TestTree(t *testing.T) {
 		}
 	}
 	tree.Print()
-	// // 获取所有域名配置
-	// all := tree.All()
-	// fmt.Println("全部域名配置:")
-	// for domain, config := range all {
-	// 	fmt.Printf("%s: %s\n", domain, config)
-	// }
+	// 获取所有域名配置
+	all := tree.All()
+	fmt.Println("全部域名配置:")
+	for config := range all {
+		fmt.Printf("%s: %s\n", config.Domain, config.Value)
+	}
 }
 
 func TestDomainTreeDelete(t *testing.T) {
@@ -155,5 +157,17 @@ func BenchmarkDomainTreeLookup(b *testing.B) {
 
 	for b.Loop() {
 		tree.Lookup("sub.a.2.3.3.45.5.6.example.com")
+	}
+}
+
+func BenchmarkDomainTreeLookup2(b *testing.B) {
+	tree := NewDomainTree[int]()
+	for i := 0; i <= 10000; i++ {
+		domain := fmt.Sprintf("%d.example.com", i)
+		tree.Add(domain, 1)
+	}
+
+	for b.Loop() {
+		tree.Lookup("10000.example.com")
 	}
 }

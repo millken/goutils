@@ -3,7 +3,6 @@ package trie
 import (
 	"fmt"
 	"iter"
-	"strings"
 	"sync"
 )
 
@@ -14,7 +13,7 @@ type DomainTree[T any] struct {
 }
 
 func NewDomainTree[T any]() *DomainTree[T] {
-	return &DomainTree[T]{root: newDomainNode[T]()}
+	return &DomainTree[T]{root: newDomainNode[T]("", 0)}
 }
 
 // Add 添加域名到树中
@@ -40,22 +39,84 @@ func (tree *DomainTree[T]) Delete(domain string) {
 }
 
 // Map 遍历并转换所有节点数据
-// func (tree *DomainTree[T]) Map(transform func(T) T) {
-// 	tree.root.each(func(node *DomainNode[T]) {
-// 		node.data = transform(node.data)
-// 	})
-// }
+func (tree *DomainTree[T]) Map(transform func(T) T) {
+	tree.Lock()
+	defer tree.Unlock()
+	tree.root.each(func(node *DomainNode[T]) {
+		if node.isLeaf {
+			node.data = transform(node.data)
+		}
+	})
+}
+
+// All 返回一个迭代器，遍历所有域名及其配置
+func (tree *DomainTree[T]) All() iter.Seq[struct {
+	Domain string
+	Value  T
+}] {
+	return func(yield func(struct {
+		Domain string
+		Value  T
+	}) bool) {
+		var walk func(node *DomainNode[T], labels []string) bool
+		walk = func(node *DomainNode[T], labels []string) bool {
+			if node.isLeaf {
+				// 域名应从 labels 反转拼接
+				domain := ""
+				for i := len(labels) - 1; i >= 0; i-- {
+					if i != len(labels)-1 {
+						domain += "."
+					}
+					domain += labels[i]
+				}
+				if !yield(struct {
+					Domain string
+					Value  T
+				}{Domain: domain, Value: node.data}) {
+					return false
+				}
+			}
+			for _, child := range node.children {
+				if !walk(child, append(labels, child.label)) {
+					return false
+				}
+			}
+			return true
+		}
+		walk(tree.root, nil)
+	}
+}
+
+func (tree *DomainTree[T]) Reset() {
+	tree.Lock()
+	defer tree.Unlock()
+	tree.root = newDomainNode[T]("", 0)
+}
 
 func (tree *DomainTree[T]) Print() {
-	tree.root.each(func(deep int, label string, node *DomainNode[T]) {
-		if node.isLeaf {
-			fmt.Printf("%s", strings.Repeat(" ", deep*8))
-		} else {
-			fmt.Printf("%s", strings.Repeat(" ", deep*8))
+	var printNode func(node *DomainNode[T], prefix string, isLast bool)
+	printNode = func(node *DomainNode[T], prefix string, isLast bool) {
+		if node.label != "" {
+			branch := "├── "
+			if isLast {
+				branch = "└── "
+			}
+			leafMark := ""
+			if node.isLeaf {
+				leafMark = "."
+			}
+			fmt.Printf("%s%s%s%s\n", prefix, branch, node.label, leafMark)
+			if isLast {
+				prefix += "    "
+			} else {
+				prefix += "│   "
+			}
 		}
-		fmt.Printf("%s|", label)
-		fmt.Println()
-	})
+		for i, child := range node.children {
+			printNode(child, prefix, i == len(node.children)-1)
+		}
+	}
+	printNode(tree.root, "", true)
 }
 
 func splitDomainReverseIterator(domain string) iter.Seq[string] {

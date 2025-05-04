@@ -1,106 +1,114 @@
 package trie
 
-// DomainNode 表示域名树节点
 type DomainNode[T any] struct {
-	children map[string]*DomainNode[T]
+	children []*DomainNode[T]
+	label    string
 	data     T
+	deep     int
 	isLeaf   bool
 }
 
-func newDomainNode[T any]() *DomainNode[T] {
+// 新建节点
+func newDomainNode[T any](label string, deep int) *DomainNode[T] {
 	var empty T
 	return &DomainNode[T]{
-		children: make(map[string]*DomainNode[T]),
+		children: nil,
+		label:    label,
 		data:     empty,
+		deep:     deep,
 		isLeaf:   false,
 	}
 }
 
-// addChild 添加子节点
-func (node *DomainNode[T]) add(domain string, data T) {
-	if node.children == nil {
-		node.children = make(map[string]*DomainNode[T])
-	}
-
-	// 从右向左遍历域名
-	for part := range splitDomainReverseIterator(domain) {
-		child, ok := node.children[part]
-		if !ok {
-			child = &DomainNode[T]{children: make(map[string]*DomainNode[T])}
-			node.children[part] = child
+// 查找子节点
+func (node *DomainNode[T]) findChild(label string) (*DomainNode[T], int) {
+	for i, child := range node.children {
+		if child.label == label {
+			return child, i
 		}
-		node = child
 	}
-	node.data = data
-	node.isLeaf = true
-
+	return nil, -1
 }
 
-func (node *DomainNode[T]) delete(domain string) {
-	if node == nil {
-		return
+// 添加子节点
+func (node *DomainNode[T]) add(domain string, data T) {
+	curr := node
+	deep := node.deep
+	for part := range splitDomainReverseIterator(domain) {
+		child, idx := curr.findChild(part)
+		if idx == -1 {
+			child = newDomainNode[T](part, deep+1)
+			curr.children = append(curr.children, child)
+		}
+		curr = child
+		deep++
 	}
+	curr.data = data
+	curr.isLeaf = true
+}
+
+// 删除节点
+func (node *DomainNode[T]) delete(domain string) {
 	type pathElem struct {
 		parent *DomainNode[T]
 		label  string
+		idx    int
 	}
 	var path []pathElem
 	curr := node
 	for part := range splitDomainReverseIterator(domain) {
-		child, ok := curr.children[part]
-		if !ok {
+		child, idx := curr.findChild(part)
+		if child == nil {
 			return
 		}
-		path = append(path, pathElem{curr, part})
+		path = append(path, pathElem{curr, part, idx})
 		curr = child
 	}
-
 	if curr.isLeaf {
 		curr.isLeaf = false
 		var empty T
 		curr.data = empty
 	}
+	// 回溯清理无用节点
 	for i := len(path) - 1; i >= 0; i-- {
 		parent := path[i].parent
-		label := path[i].label
-		child := parent.children[label]
+		idx := path[i].idx
+		child := parent.children[idx]
 		if len(child.children) == 0 && !child.isLeaf {
-			delete(parent.children, label)
+			// 删除该子节点
+			parent.children = append(parent.children[:idx], parent.children[idx+1:]...)
 		} else {
 			break
 		}
 	}
 }
 
+// 查找
 func (node *DomainNode[T]) lookup(domain string) (T, bool) {
 	var empty T
-	// 从右向左遍历域名
+	curr := node
 	for part := range splitDomainReverseIterator(domain) {
-		child, ok := node.children[part]
-		if !ok {
+		child, _ := curr.findChild(part)
+		if child == nil {
 			// 精确匹配失败，尝试通配符
-			child, ok = node.children["*"]
-			if ok && child.isLeaf {
+			child, _ = curr.findChild("*")
+			if child != nil && child.isLeaf {
 				return child.data, true
 			}
 			return empty, false
 		}
-		node = child
+		curr = child
 	}
-	if node.isLeaf {
-		return node.data, true
+	if curr.isLeaf {
+		return curr.data, true
 	}
 	return empty, false
 }
 
 // each 遍历树中所有节点
-func (node *DomainNode[T]) each(callback func(int, string, *DomainNode[T])) {
-	// callback(deep, label, child)
-	// deep := 1
-	// for label, child := range node.children {
-	// 	if child != nil {
-	// 		child.each(callback)
-	// 	}
-	// 	deep++
-	// }
+func (node *DomainNode[T]) each(callback func(*DomainNode[T])) {
+	callback(node)
+	for _, child := range node.children {
+		child.each(callback)
+	}
 }
