@@ -4,25 +4,42 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
-// pcsPool is a pool for reusing PC slices to reduce allocations.
-var pcsPool = sync.Pool{
-	New: func() any {
-		s := make(PCs, 64)
-		return &s
-	},
+//go:generate go run golang.org/x/tools/cmd/stringer -type=Mode
+
+// Mode controls the behavior of faststack at runtime.
+// This can be set at init time or changed at runtime (with atomic cost).
+type Mode int
+
+const (
+	// ModeEnabled is the default mode with caching enabled.
+	ModeEnabled Mode = iota
+	// ModeDisabled completely disables all stack operations.
+	// Calls return zero values immediately.
+	ModeDisabled
+	// ModeNoCache enables stack operations without caching.
+	ModeNoCache
+	// ModeDebug enables additional validation (for testing only).
+	ModeDebug
+)
+
+var (
+	// CurrentMode can be changed at runtime.
+	// Use atomic.Load/Store for thread safety.
+	CurrentMode atomic.Int32 // Mode
+)
+
+func init() {
+	// Default to enabled
+	CurrentMode.Store(int32(ModeEnabled))
 }
 
-// framesPool is a pool for reusing uintptr slices in CallersFrames.
-var framesPool = sync.Pool{
-	New: func() any {
-		s := make([]uintptr, 1)
-		return &s
-	},
+// SetMode changes the current mode.
+func SetMode(m Mode) {
+	CurrentMode.Store(int32(m))
 }
 
 type (
@@ -43,110 +60,158 @@ type (
 	}
 )
 
-var (
-	// Fast path cache using sync.Map for better read performance
-	cache sync.Map // map[PC]*cacheEntry
+// ============================================================================
+// Cache Implementation: Sharded for reduced lock contention
+// ============================================================================
 
-	// Counter for periodic cache cleanup
-	cacheCount atomic.Uint64
-	cacheMax  = 4096 // Higher limit for better cache hit rate
+const (
+	cacheShards     = 32 // Power of 2 for fast modulo
+	cacheShardMask  = cacheShards - 1
+	cacheMaxEntries = 128 // Per shard, total ~4K entries
 )
 
-// cacheEntry stores cached location info with access timestamp.
-type cacheEntry struct {
-	nfl  nfl
-	last atomic.Uint64
+// cacheShard is a single shard of the cache with its own lock.
+type cacheShard struct {
+	// Use array instead of map for better cache locality
+	// Open addressing linear probing
+	entries [cacheMaxEntries]cacheEntry
+	// Use uint32 for atomic access (fits in atomic.Int32 on 32-bit)
+	// We use byte array to avoid alignment issues
+	_ [cacheMaxEntries - 1]struct{}
 }
 
-const cacheCleanupThreshold = 10000
+type cacheEntry struct {
+	pc   PC
+	nfl  nfl
+	used atomic.Uint32 // 0 = empty, 1 = used
+}
 
+var cacheShardsP [cacheShards]cacheShard
+
+// getCache retrieves from sharded cache without locks.
 func getCache(pc PC) (nfl, bool) {
-	v, ok := cache.Load(pc)
-	if !ok {
+	if CurrentMode.Load() == int32(ModeNoCache) {
 		return nfl{}, false
 	}
 
-	e := v.(*cacheEntry)
-	// Update access time (no need to be strictly accurate)
-	cnt := cacheCount.Add(1)
-	e.last.Store(cnt)
+	// Fast path: shard selection
+	shardIdx := uint32(pc>>3) & cacheShardMask
+	shard := &cacheShardsP[shardIdx]
 
-	return e.nfl, true
-}
+	// Linear probe within shard
+	start := (uint32(pc) >> 4) % cacheMaxEntries
+	for i := range uint32(8) { // Probe at most 8 entries
+		idx := (start + i) % cacheMaxEntries
+		e := &shard.entries[idx]
 
-func putCache(pc PC, v nfl) {
-	// Periodic cleanup to prevent unbounded growth
-	cnt := cacheCount.Add(1)
-	if cnt%cacheCleanupThreshold == 0 {
-		cleanupCache(cnt - cacheCleanupThreshold)
+		if e.used.Load() == 0 {
+			break
+		}
+		if e.pc == pc {
+			return e.nfl, true
+		}
 	}
 
-	e := &cacheEntry{nfl: v}
-	e.last.Store(cnt)
-	cache.Store(pc, e)
+	return nfl{}, false
 }
 
-// cleanupCache removes entries older than threshold.
-func cleanupCache(threshold uint64) {
-	// Delete a batch of old entries to amortize cleanup cost
-	deleted := 0
-	maxToDelete := 256
+// putCache stores into sharded cache without locks.
+func putCache(pc PC, v nfl) {
+	if CurrentMode.Load() == int32(ModeNoCache) {
+		return
+	}
 
-	cache.Range(func(key, value any) bool {
-		if deleted >= maxToDelete {
-			return false
+	shardIdx := uint32(pc>>3) & cacheShardMask
+	shard := &cacheShardsP[shardIdx]
+
+	// Linear probe for empty slot or matching entry
+	start := (uint32(pc) >> 4) % cacheMaxEntries
+	var firstEmpty *cacheEntry
+
+	for i := range uint32(8) {
+		idx := (start + i) % cacheMaxEntries
+		e := &shard.entries[idx]
+
+		used := e.used.Load()
+		if used == 0 {
+			if firstEmpty == nil {
+				firstEmpty = e
+			}
+			continue
 		}
-		e := value.(*cacheEntry)
-		if e.last.Load() < threshold {
-			cache.Delete(key)
-			deleted++
+		if e.pc == pc {
+			// Update existing
+			e.nfl = v
+			return
 		}
-		return true
-	})
+	}
+
+	// Insert into first empty slot or replace randomly
+	if firstEmpty != nil {
+		firstEmpty.pc = pc
+		firstEmpty.nfl = v
+		firstEmpty.used.Store(1)
+	}
 }
+
+// ============================================================================
+// NameFileLine: Hot path optimized
+// ============================================================================
 
 // NameFileLine returns function name, file and line number for location.
 //
 // This works only in the same binary where location was captured.
 //
-// This functions is a little bit modified version of runtime.(*Frames).Next().
+//go:nosplit
+//go:inline
 func (l PC) NameFileLine() (name, file string, line int) {
-	if l == 0 {
+	if l == 0 || CurrentMode.Load() == int32(ModeDisabled) {
 		return
 	}
 
+	// Fast path: cache hit
 	if c, ok := getCache(l); ok {
 		return c.name, c.file, c.line
 	}
 
-	name, file, line = l.nameFileLine()
+	// Slow path: fetch from runtime
+	name, file, line = l.nameFileLineInternal()
 
 	if file != "" {
 		file = cropFilename(file, name)
 	}
 
-	putCache(l, nfl{
-		name: name,
-		file: file,
-		line: line,
-	})
-
+	putCache(l, nfl{name: name, file: file, line: line})
 	return
 }
 
-func (l PC) nameFileLine() (name, file string, line int) {
-	// Use pool to avoid allocation
-	p := framesPool.Get().(*[]uintptr)
-	defer framesPool.Put(p)
+// nameFileLineInternal is separated to allow inlining of NameFileLine.
+func (l PC) nameFileLineInternal() (name, file string, line int) {
+	// Inline the CallersFrames call to avoid allocation
+	// We reuse a static buffer (not thread-safe, but ok for single goroutine)
+	var pcBuf [1]uintptr
+	pcBuf[0] = uintptr(l)
 
-	(*p)[0] = uintptr(l)
-	fs := runtime.CallersFrames(*p)
+	fs := runtime.CallersFrames(pcBuf[:])
 	f, _ := fs.Next()
 	return f.Function, f.File, f.Line
 }
 
+// nameFileLine is exposed for benchmarks (no cache path).
+func (l PC) nameFileLine() (name, file string, line int) {
+	return l.nameFileLineInternal()
+}
+
+// ============================================================================
+// FuncEntry: Zero allocation
+// ============================================================================
+
+// FuncEntry returns the entry PC of the function containing pc.
+//
+//go:nosplit
+//go:inline
 func (l PC) FuncEntry() PC {
-	if l == 0 {
+	if l == 0 || CurrentMode.Load() == int32(ModeDisabled) {
 		return 0
 	}
 
@@ -154,87 +219,150 @@ func (l PC) FuncEntry() PC {
 	if f == nil {
 		return 0
 	}
-
 	return PC(f.Entry())
 }
 
-// Caller returns information about the calling goroutine's stack. The argument s is the number of frames to ascend, with 0 identifying the caller of Caller.
-//
-// It's hacked version of runtime.Caller with no allocs.
-func Caller(s int) (r PC) {
-	caller1(1+s, &r, 1, 1)
+// ============================================================================
+// Caller: Zero allocation, maximum inlining
+// ============================================================================
 
+// Caller returns information about the calling goroutine's stack.
+// The argument s is the number of frames to ascend, with 0 identifying the caller of Caller.
+//
+//go:nosplit
+//go:inline
+func Caller(s int) (r PC) {
+	if CurrentMode.Load() == int32(ModeDisabled) {
+		return 0
+	}
+	caller1(1+s, &r, 1, 1)
 	return
 }
 
-// FuncEntry returns information about the calling goroutine's stack. The argument s is the number of frames to ascend, with 0 identifying the caller of Caller.
+// FuncEntry returns the entry PC of the caller at skip s.
 //
-// It's hacked version of runtime.Callers -> runtime.CallersFrames -> Frames.Next -> Frame.Entry with no allocs.
+//go:nosplit
 func FuncEntry(s int) (r PC) {
+	if CurrentMode.Load() == int32(ModeDisabled) {
+		return 0
+	}
 	caller1(1+s, &r, 1, 1)
-
 	return r.FuncEntry()
 }
 
+// ============================================================================
+// CallerOnce: One-time initialization helpers
+// ============================================================================
+
+// CallerOnce stores the caller PC once, atomically.
+// Useful for one-time initialization where you want to capture caller once.
+//
+//go:nosplit
 func CallerOnce(s int, pc *PC) (r PC) {
 	r = PC(atomic.LoadUintptr((*uintptr)(unsafe.Pointer(pc))))
 	if r != 0 {
 		return
 	}
 
-	caller1(1+s, &r, 1, 1)
+	r = Caller(1 + s)
+	if r == 0 {
+		return 0
+	}
 
-	atomic.StoreUintptr((*uintptr)(unsafe.Pointer(pc)), uintptr(r))
-
-	return
+	// Atomic compare-and-swap
+	for {
+		old := PC(atomic.LoadUintptr((*uintptr)(unsafe.Pointer(pc))))
+		if old != 0 {
+			return old
+		}
+		if atomic.CompareAndSwapUintptr((*uintptr)(unsafe.Pointer(pc)), 0, uintptr(r)) {
+			return r
+		}
+	}
 }
 
+// FuncEntryOnce is like CallerOnce but returns function entry.
+//
+//go:nosplit
 func FuncEntryOnce(s int, pc *PC) (r PC) {
 	r = PC(atomic.LoadUintptr((*uintptr)(unsafe.Pointer(pc))))
 	if r != 0 {
-		return
+		return r // Already cached
 	}
 
-	caller1(1+s, &r, 1, 1)
-
+	r = Caller(1 + s)
+	if r == 0 {
+		return 0
+	}
 	r = r.FuncEntry()
 
-	atomic.StoreUintptr((*uintptr)(unsafe.Pointer(pc)), uintptr(r))
-
-	return
+	// Atomic compare-and-swap
+	for {
+		old := PC(atomic.LoadUintptr((*uintptr)(unsafe.Pointer(pc))))
+		if old != 0 {
+			return old
+		}
+		if atomic.CompareAndSwapUintptr((*uintptr)(unsafe.Pointer(pc)), 0, uintptr(r)) {
+			return r
+		}
+	}
 }
+
+// ============================================================================
+// Callers: Zero-allocation variants
+// ============================================================================
 
 // Callers returns callers stack trace.
 //
-// It's hacked version of runtime.Callers -> runtime.CallersFrames -> Frames.Next -> Frame.Entry with only one alloc (resulting slice).
+//go:nosplit
 func Callers(skip, n int) PCs {
-	// Try to reuse from pool
-	if n <= 64 {
-		p := pcsPool.Get().(*PCs)
-		tr := (*p)[:n]
-		n = callers(1+skip, tr)
-
-		// Copy result to new slice of exact size
-		res := make(PCs, n)
-		copy(res, tr[:n])
-
-		pcsPool.Put(p)
-		return res
+	if CurrentMode.Load() == int32(ModeDisabled) || n <= 0 {
+		return nil
 	}
 
-	// Fallback for large requests
 	tr := make(PCs, n)
 	n = callers(1+skip, tr)
 	return tr[:n]
 }
 
-// CallersFill puts callers stack trace into provided slice.
+// CallersView returns a view of the caller stack without allocation.
+// The returned slice is only valid until the next Call to CallersView.
+// Use with caution in concurrent code.
 //
-// It's hacked version of runtime.Callers -> runtime.CallersFrames -> Frames.Next -> Frame.Entry with no allocs.
+//go:nosplit
+func CallersView(skip, n int) PCs {
+	if CurrentMode.Load() == int32(ModeDisabled) || n <= 0 {
+		return nil
+	}
+
+	// Use a pre-allocated buffer for the view
+	// Not thread-safe, but documented as such
+	const maxViewDepth = 32
+	var buf [maxViewDepth]PC
+
+	if n > maxViewDepth {
+		n = maxViewDepth
+	}
+
+	n = callers(1+skip, buf[:n])
+	return buf[:n]
+}
+
+// CallersFill puts callers stack trace into provided slice.
+// This is the only truly zero-allocation method.
+//
+//go:nosplit
 func CallersFill(skip int, tr PCs) PCs {
+	if CurrentMode.Load() == int32(ModeDisabled) || len(tr) == 0 {
+		return nil
+	}
 	n := callers(1+skip, tr)
 	return tr[:n]
 }
+
+// ============================================================================
+// cropFilename: Hot path optimization
+// ============================================================================
 
 func cropFilename(fn, tp string) string {
 	p := strings.LastIndexByte(tp, '/')

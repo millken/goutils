@@ -42,7 +42,7 @@ func TestLocationOnce(t *testing.T) {
 	var pc PC
 
 	CallerOnce(-1, &pc)
-	assert.Equal(t, "faststack.go:185", pc.String())
+	assert.Equal(t, "faststack.go:267", pc.String())
 
 	pc++
 	save := pc
@@ -55,7 +55,7 @@ func TestLocationOnce(t *testing.T) {
 	pc = 0
 
 	FuncEntryOnce(-1, &pc)
-	assert.Equal(t, "faststack.go:192", pc.String())
+	assert.Equal(t, "faststack.go:287", pc.String())
 
 	pc++
 	save = pc
