@@ -1,5 +1,7 @@
 package trie
 
+import "slices"
+
 type DomainNode[T any] struct {
 	children []*DomainNode[T]
 	label    string
@@ -20,25 +22,34 @@ func newDomainNode[T any](label string, deep int) *DomainNode[T] {
 	}
 }
 
-// 查找子节点
+// 二分查找，返回 (找到的节点, 下标)，如果没找到，下标为插入点
 func (node *DomainNode[T]) findChild(label string) (*DomainNode[T], int) {
-	for i, child := range node.children {
-		if child.label == label {
-			return child, i
+	low, high := 0, len(node.children)-1
+	for low <= high {
+		mid := (low + high) / 2
+		if node.children[mid].label == label {
+			return node.children[mid], mid
+		} else if node.children[mid].label < label {
+			low = mid + 1
+		} else {
+			high = mid - 1
 		}
 	}
-	return nil, -1
+	return nil, low // 未找到，low为插入点
 }
 
-// 添加子节点
+// 插入时保持有序
 func (node *DomainNode[T]) add(domain string, data T) {
 	curr := node
 	deep := node.deep
 	for part := range splitDomainReverseIterator(domain) {
 		child, idx := curr.findChild(part)
-		if idx == -1 {
+		if child == nil {
 			child = newDomainNode[T](part, deep+1)
-			curr.children = append(curr.children, child)
+			// 插入到正确位置
+			curr.children = append(curr.children, nil)
+			copy(curr.children[idx+1:], curr.children[idx:])
+			curr.children[idx] = child
 		}
 		curr = child
 		deep++
@@ -51,7 +62,6 @@ func (node *DomainNode[T]) add(domain string, data T) {
 func (node *DomainNode[T]) delete(domain string) {
 	type pathElem struct {
 		parent *DomainNode[T]
-		label  string
 		idx    int
 	}
 	var path []pathElem
@@ -61,7 +71,7 @@ func (node *DomainNode[T]) delete(domain string) {
 		if child == nil {
 			return
 		}
-		path = append(path, pathElem{curr, part, idx})
+		path = append(path, pathElem{curr, idx})
 		curr = child
 	}
 	if curr.isLeaf {
@@ -75,8 +85,7 @@ func (node *DomainNode[T]) delete(domain string) {
 		idx := path[i].idx
 		child := parent.children[idx]
 		if len(child.children) == 0 && !child.isLeaf {
-			// 删除该子节点
-			parent.children = append(parent.children[:idx], parent.children[idx+1:]...)
+			parent.children = slices.Delete(parent.children, idx, idx+1)
 		} else {
 			break
 		}

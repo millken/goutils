@@ -86,8 +86,20 @@ func TestTree(t *testing.T) {
 	// 获取所有域名配置
 	all := tree.All()
 	fmt.Println("全部域名配置:")
+	domains := make([]string, 0)
 	for config := range all {
 		fmt.Printf("%s: %s\n", config.Domain, config.Value)
+		domains = append(domains, config.Domain)
+	}
+	for _, domain := range domains {
+		tree.Delete(domain)
+	}
+	for _, test := range tests {
+
+		val, found := tree.Lookup(test.domain)
+		if found == true || val != "" {
+			t.Fatalf("域名 %s 删除失败 实际值: %s\n", test.domain, val)
+		}
 	}
 }
 
@@ -168,6 +180,6 @@ func BenchmarkDomainTreeLookup2(b *testing.B) {
 	}
 
 	for b.Loop() {
-		tree.Lookup("10000.example.com")
+		tree.Lookup("8400.example.com")
 	}
 }
